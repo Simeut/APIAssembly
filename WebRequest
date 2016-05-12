@@ -1,0 +1,30 @@
+Public Class WebRequest
+    Private request As HttpWebRequest
+
+    Public Sub New(url As String, Optional contentType As String = "application/json")
+        request = HttpWebRequest.Create(url)
+        request.Accept = contentType
+    End Sub
+
+    Public Sub New(url As String, userName As String, passWord As String, Optional contentType As String = "application/json")
+        request = HttpWebRequest.Create(url)
+        request.Credentials = New NetworkCredential(userName, passWord)
+        request.Accept = contentType
+    End Sub
+
+    Public Function GetData() As Object
+        request.Method = "GET"
+        Dim res_stream As New StreamReader(request.GetResponse.GetResponseStream)
+        Return JsonToObject(res_stream.ReadToEnd)
+    End Function
+
+    Public Function PostData(postDataValue As String) As Object
+        request.Method = "POST"
+        Dim reqStream As Stream = request.GetRequestStream
+        Dim arrBytes As Byte() = Encoding.UTF8.GetBytes(postDataValue)
+        reqStream.Write(arrBytes, 0, arrBytes.Length)
+        Dim resSstream As New StreamReader(request.GetResponse.GetResponseStream)
+        Return JsonToObject(resSstream.ReadToEnd)
+    End Function
+
+End Class
