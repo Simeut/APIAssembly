@@ -1,0 +1,202 @@
+Imports eBay.Service.Call
+Imports eBay.Service.Core.Sdk
+Imports eBay.Service.Core.Soap
+
+Public Class eBayAccount
+    Public eBayToken As String
+    Public eBaySite As SiteCodeType
+    Public eBayStore As String
+
+    Public Sub New()
+
+    End Sub
+
+    Public Sub New(store As String, token As String, site As String)
+        eBayStore = store
+        eBayToken = token
+        eBaySite = GetSiteCode(site)
+    End Sub
+
+    Private Function GetSiteCode(storeSite As String) As SiteCodeType
+        Select Case storeSite
+            Case "US"
+                Return SiteCodeType.US
+            Case "UK"
+                Return SiteCodeType.UK
+            Case "DE"
+                Return SiteCodeType.Germany
+            Case Else
+                Return Nothing
+        End Select
+    End Function
+
+End Class
+
+Public Class eBayFeedback
+    Public FeedbackList As FeedbackDetailTypeCollection
+    Public FeedbackSummary As FeedbackSummaryType
+End Class
+
+Public Class eBayApi
+    Public Account As eBayAccount
+    Private Const _ApiEndpoint As String = "https://api.ebay.com/wsapi"
+    Private _ApiSession As New ApiContext
+
+    Public Sub New(ebayAccount As eBayAccount)
+        Account = ebayAccount
+        _ApiSession.ApiCredential = New ApiCredential(Account.eBayToken)
+        _ApiSession.SoapApiServerUrl = _ApiEndpoint
+        _ApiSession.Site = Account.eBaySite
+    End Sub
+
+    Public Sub New(store As String, token As String, site As String)
+        Account = New eBayAccount(store, token, site)
+        _ApiSession.ApiCredential = New ApiCredential(Account.eBayToken)
+        _ApiSession.SoapApiServerUrl = _ApiEndpoint
+        _ApiSession.Site = Account.eBaySite
+    End Sub
+
+    Public Function GetOrderTransactions(orderLineItemId As ItemTransactionIDTypeCollection) As OrderTypeCollection
+        Dim _GetOrderTransactionsCall As New GetOrderTransactionsCall(_ApiSession)
+        _GetOrderTransactionsCall.IncludeFinalValueFees = True
+        _GetOrderTransactionsCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        Return _GetOrderTransactionsCall.GetOrderTransactions(orderLineItemId)
+    End Function
+
+    Public Function SearchTransactionByOrderLineItemID(modTimeFrom As Date, modTimeTo As Date, orderLineItemID As String()) As TransactionTypeCollection
+        Dim result As New TransactionTypeCollection
+        For Each txn As TransactionType In GetSellerTransactions(modTimeFrom, modTimeTo)
+            If orderLineItemID.Contains(txn.OrderLineItemID) Then result.Add(txn)
+        Next
+        Return result
+    End Function
+
+    Public Function SearchTransactionBySalesNo(modTimeFrom As Date, modTimeTo As Date, orderLineItemID As String()) As TransactionTypeCollection
+        Dim result As New TransactionTypeCollection
+        For Each txn As TransactionType In GetSellerTransactions(modTimeFrom, modTimeTo)
+            If orderLineItemID.Contains(txn.ShippingDetails.SellingManagerSalesRecordNumber) Then result.Add(txn)
+        Next
+        Return result
+    End Function
+
+    Private Function GetSellerTransactions(modTimeFrom As Date, modTimeTo As Date, ByRef hasMorePages As Boolean, Optional pageSize As Integer = 200, Optional pageNum As Integer = 1) As TransactionTypeCollection
+        ' ----Call fetching transactions for specified seller----
+        ' IncludeCodiceFiscale: If true, returns the Tax code for the user.
+        ' IncludeContainingOrder:Include this field and set it to True if you want the ContainingOrder container to be returned in the response under each Transaction node. 
+        '       For single line item orders, the ContainingOrder.OrderID value takes the value of the OrderLineItemID value for the order line item. 
+        '       For Combined Invoice orders, the ContainingOrder.OrderID value will be shared by at least two order line items (transactions) that are part of the same order.
+        ' IncludeFinalValueFee: Indicates whether to include Final Value Fee (FVF) in the response.
+        Dim _GetSellerTransactionsCall As New GetSellerTransactionsCall(_ApiSession), _page As New PaginationType, _result As TransactionTypeCollection
+        _page.EntriesPerPage = pageSize
+        _page.PageNumber = pageNum
+        _GetSellerTransactionsCall.IncludeCodiceFiscale = True
+        _GetSellerTransactionsCall.IncludeContainingOrder = True
+        _GetSellerTransactionsCall.IncludeFinalValueFee = True
+        _GetSellerTransactionsCall.Pagination = _page
+        _GetSellerTransactionsCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        _result = _GetSellerTransactionsCall.GetSellerTransactions(modTimeFrom, modTimeTo)
+        hasMorePages = _GetSellerTransactionsCall.HasMoreTransactions
+        Return _result
+    End Function
+
+    Public Function GetSellerTransactions(modTimeFrom As Date, modTimeTo As Date) As TransactionTypeCollection
+        Dim _hasMoreTransactions As Boolean, _iPageSize As Integer = 200, _iPageNum As Integer = 1
+        Dim _resultCollection As TransactionTypeCollection = GetSellerTransactions(modTimeFrom, modTimeTo, _hasMoreTransactions, _iPageSize, _iPageNum)
+        Do While _hasMoreTransactions
+            _iPageNum += 1
+            _resultCollection.AddRange(GetSellerTransactions(modTimeFrom, modTimeTo, _hasMoreTransactions, _iPageSize, _iPageNum))
+        Loop
+        Return _resultCollection
+    End Function
+
+    Public Function GetSellerTransactions(modTimeFrom As Date, modTimeTo As Date, orderLineTimeId As String) As TransactionTypeCollection
+        ' 让From和To间距尽量小，否则效率非常低（对于查找单个订单来说）
+        Dim _transactions As TransactionTypeCollection = GetSellerTransactions(modTimeFrom, modTimeTo), _result As New TransactionTypeCollection()
+        For Each txn As TransactionType In _transactions
+            If txn.OrderLineItemID = orderLineTimeId Then _result.Add(txn)
+        Next
+        Return _result
+    End Function
+
+    Public Function GetSellerDashboard() As GetSellerDashboardResponseType
+        Dim _GetSellerDashboardCall As New GetSellerDashboardCall(_ApiSession)
+        _GetSellerDashboardCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        Try
+            _GetSellerDashboardCall.GetSellerDashboard()
+            Return _GetSellerDashboardCall.ApiResponse
+        Catch ex As Exception
+            Return Nothing
+        End Try
+    End Function
+
+    Public Function GetDispute(startTime As Date, endTime As Date, Optional pageNum As Integer = 1, Optional pageSize As Integer = 200) As DisputeTypeCollection
+        Dim _GetDisputeCall As New GetUserDisputesCall(_ApiSession), page As New PaginationType, res As New DisputeTypeCollection, pageCount As Integer
+        page.EntriesPerPage = pageSize
+        page.PageNumber = pageNum
+        _GetDisputeCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        _GetDisputeCall.DisputeFilterType = DisputeFilterTypeCodeType.AllInvolvedDisputes
+        _GetDisputeCall.ModTimeFrom = startTime
+        _GetDisputeCall.ModTimeTo = endTime
+        res = _GetDisputeCall.GetUserDisputes(page)
+        pageCount = _GetDisputeCall.PaginationResult.TotalNumberOfPages
+        If pageCount > 1 And pageNum = 1 Then
+            For i = 2 To pageCount
+                res.AddRange(GetDispute(startTime, endTime, i))
+            Next
+        End If
+        Return res
+    End Function
+
+    Public Function GetUser() As UserType
+        Dim _GetUserCall As New GetUserCall(_ApiSession)
+        _GetUserCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        Return _GetUserCall.GetUser()
+    End Function
+
+    Public Function GetUser(userName As String) As UserType
+        Dim _GetUserCall As New GetUserCall(_ApiSession)
+        _GetUserCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        Return _GetUserCall.GetUser(userName)
+    End Function
+
+    Public Function GetStore() As StoreType
+        Dim _GetStoreCall As New GetStoreCall(_ApiSession)
+        Try
+            Return _GetStoreCall.GetStore()
+        Catch ex As Exception
+            Return Nothing
+        End Try
+    End Function
+
+    Public Function GetFeedback(Optional eBayTransactionId As String = Nothing, Optional itemId As String = Nothing) As eBayFeedback
+        Dim _GetFeedbackCall As New GetFeedbackCall(_ApiSession), result As New eBayFeedback
+        If IsNothing(eBayTransactionId) And IsNothing(itemId) Then
+            Dim _page As New PaginationType, _feedbackList As New CommentTypeCodeTypeCollection
+            _page.EntriesPerPage = 200
+            _page.PageNumber = 1
+            _feedbackList.Add(CommentTypeCodeType.Negative)
+            _feedbackList.Add(CommentTypeCodeType.Neutral)
+            _GetFeedbackCall.Pagination = _page
+            _GetFeedbackCall.CommentTypeList = _feedbackList
+        Else
+            _GetFeedbackCall.ItemID = itemId
+            _GetFeedbackCall.TransactionID = eBayTransactionId
+        End If
+        _GetFeedbackCall.DetailLevelList.Add(DetailLevelCodeType.ReturnAll)
+        result.FeedbackList = _GetFeedbackCall.GetFeedback()
+        result.FeedbackSummary = _GetFeedbackCall.FeedbackSummary
+        Return result
+    End Function
+
+    Public Function GetAccount(startTime As Date, endTime As Date)
+        Dim _GetAccountCall As New GetAccountCall(_ApiSession), result As New AccountSummaryType
+        _GetAccountCall.AccountHistorySelection = AccountHistorySelectionCodeType.BetweenSpecifiedDates
+        _GetAccountCall.BeginDate = startTime
+        _GetAccountCall.EndDate = endTime
+        _GetAccountCall.Execute()
+        result = _GetAccountCall.AccountSummary
+        Return result
+    End Function
+
+End Class
+
