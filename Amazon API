@@ -1,0 +1,216 @@
+Imports MWSFinancesService
+Imports MarketplaceWebService
+Imports MarketplaceWebServiceOrders
+Imports MarketplaceWebServiceProducts
+Imports FBAInventoryServiceMWS
+Imports FBAInboundServiceMWS
+
+Public Class AmazonAccount
+    Public AwsAccessKeyId As String 
+    Public AwsSecretAccessKey As String 
+    Public SellerID As String
+    Public AccountCode As String
+    Public MarketplaceID As String
+    Public AppName As String
+    Public AppVersion As String
+    Public MWSAuthToken As String
+    Public MarketplaceWebServiceConfig As New MarketplaceWebServiceConfig
+    Public MarketplaceWebServiceOrdersConfig As New MarketplaceWebServiceOrdersConfig
+    Public MarketplaceWebServiceProductsConfig As New MarketplaceWebServiceProductsConfig
+    Public MWSFinancesServiceConfig As New MWSFinancesServiceConfig
+    Public FBAInventoryServiceMWSConfig As New FBAInventoryServiceMWSConfig
+    Public FBAInboundServiceMWSConfig As New FBAInboundServiceMWSConfig
+
+    Public Sub New(storeCode As String, merchantId As String, token As String, marketplace As String)
+        AccountCode = storeCode
+        SellerID = merchantId
+        MWSAuthToken = token
+        MarketplaceID = marketplace
+        AppName = "AircraftCarrier"
+        AppVersion = "1.0"
+        MWSFinancesServiceConfig.ServiceURL = "https://mws.amazonservices.com/Finances/2015-05-01"
+        MWSFinancesServiceConfig.SetUserAgentHeader("AircraftCarrier", "1.0", "C#")
+        MarketplaceWebServiceOrdersConfig.ServiceURL = "https://mws.amazonservices.com/Orders/2013-09-01"
+        MarketplaceWebServiceOrdersConfig.SetUserAgentHeader("AircraftCarrier", "1.0", "C#")
+        MarketplaceWebServiceProductsConfig.ServiceURL = "https://mws.amazonservices.com/Products/2011-10-01"
+        MarketplaceWebServiceProductsConfig.SetUserAgentHeader("AircraftCarrier", "1.0", "C#")
+        FBAInventoryServiceMWSConfig.ServiceURL = "https://mws.amazonservices.com/FulfillmentInventory/2010-10-01"
+        FBAInventoryServiceMWSConfig.SetUserAgentHeader("AircraftCarrier", "1.0", "C#")
+        FBAInboundServiceMWSConfig.ServiceURL = "https://mws.amazonservices.com/FulfillmentInboundShipment/2010-10-01"
+        FBAInboundServiceMWSConfig.SetUserAgentHeader("AircraftCarrier", "1.0", "C#")
+    End Sub
+End Class
+
+Public Class AmazonApi
+    Private _FinancesServiceClient As MWSFinancesServiceClient
+    Private _WebServiceOrdersClient As MarketplaceWebServiceOrdersClient
+    Private _WebServiceProductsClient As MarketplaceWebServiceProductsClient
+    Private _FBAInboundShipmentClient As FBAInboundServiceMWSClient
+    Private _FBAInventoryServiceClient As FBAInventoryServiceMWSClient
+    Public SellerAccount As AmazonAccount
+
+    Public Sub New(amzAccount As AmazonAccount)
+        SellerAccount = amzAccount
+        Initialize()
+    End Sub
+
+    Public Sub New(storeCode As String, merchantId As String, token As String, marketplace As String)
+        SellerAccount = New AmazonAccount(storeCode, merchantId, token, marketplace)
+        Initialize()
+    End Sub
+
+    Private Sub Initialize()
+        _FinancesServiceClient = New MWSFinancesServiceClient(SellerAccount.AwsAccessKeyId, SellerAccount.AwsSecretAccessKey, SellerAccount.MWSFinancesServiceConfig)
+        _WebServiceOrdersClient = New MarketplaceWebServiceOrdersClient(SellerAccount.AwsAccessKeyId, SellerAccount.AwsSecretAccessKey, SellerAccount.MarketplaceWebServiceOrdersConfig)
+        _WebServiceProductsClient = New MarketplaceWebServiceProductsClient(SellerAccount.AwsAccessKeyId, SellerAccount.AwsSecretAccessKey, SellerAccount.MarketplaceWebServiceProductsConfig)
+        _FBAInventoryServiceClient = New FBAInventoryServiceMWSClient(SellerAccount.AwsAccessKeyId, SellerAccount.AwsSecretAccessKey, SellerAccount.FBAInventoryServiceMWSConfig)
+        _FBAInboundShipmentClient = New FBAInboundServiceMWSClient(SellerAccount.AwsAccessKeyId, SellerAccount.AwsSecretAccessKey, SellerAccount.FBAInboundServiceMWSConfig)
+    End Sub
+
+    Private Function GetFinancialEventsNextToken(nextToken As String) As MWSFinancesService.Model.ListFinancialEventsByNextTokenResult
+        Dim req As New Model.ListFinancialEventsByNextTokenRequest
+        req.NextToken = nextToken
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        Return _FinancesServiceClient.ListFinancialEventsByNextToken(req).ListFinancialEventsByNextTokenResult
+    End Function
+
+    Public Function GetFinancialEvents(dateFrom As Date, dateTo As Date) As MWSFinancesService.Model.FinancialEvents
+        Dim req As New Model.ListFinancialEventsRequest, res As New Model.ListFinancialEventsResult, events As New Model.FinancialEvents
+        req.PostedAfter = dateFrom
+        req.PostedBefore = dateTo
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        res = _FinancesServiceClient.ListFinancialEvents(req).ListFinancialEventsResult
+        events.AppendFinancialEvents(res.FinancialEvents)
+        If res.NextToken Is Nothing Then
+            Return events
+        Else
+            Dim resNext As New Model.ListFinancialEventsByNextTokenResult
+            resNext = GetFinancialEventsNextToken(res.NextToken)
+            AppendFinancialEvents(events, resNext.FinancialEvents)
+            Do Until resNext.NextToken Is Nothing
+                resNext = GetFinancialEventsNextToken(resNext.NextToken)
+                events.AppendFinancialEvents(resNext.FinancialEvents)
+            Loop
+            Return events
+        End If
+    End Function
+
+    Private Function GetFinancialEventGroupNextToken(nextToken As String) As MWSFinancesService.Model.ListFinancialEventGroupsByNextTokenResult
+        Dim req As New Model.ListFinancialEventGroupsByNextTokenRequest
+        req.NextToken = nextToken
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        Return _FinancesServiceClient.ListFinancialEventGroupsByNextToken(req).ListFinancialEventGroupsByNextTokenResult
+    End Function
+
+    Public Function GetFinancialEventGroup(dateFrom As Date, dateTo As Date) As List(Of MWSFinancesService.Model.FinancialEventGroup)
+        Dim req As New Model.ListFinancialEventGroupsRequest, res As New Model.ListFinancialEventGroupsResult
+        req.FinancialEventGroupStartedAfter = dateFrom
+        req.FinancialEventGroupStartedBefore = dateTo
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        res = _FinancesServiceClient.ListFinancialEventGroups(req).ListFinancialEventGroupsResult
+        If res.NextToken Is Nothing Then
+            Return res.FinancialEventGroupList
+        Else
+            Dim resNext As New Model.ListFinancialEventGroupsByNextTokenResult
+            resNext = GetFinancialEventGroupNextToken(res.NextToken)
+            res.FinancialEventGroupList.AddRange(resNext.FinancialEventGroupList)
+            Do Until resNext.NextToken Is Nothing
+                resNext = GetFinancialEventGroupNextToken(resNext.NextToken)
+                res.FinancialEventGroupList.AddRange(resNext.FinancialEventGroupList)
+            Loop
+            Return res.FinancialEventGroupList
+        End If
+    End Function
+
+    Private Function GetOrdersNextToken(nextToken As String) As MarketplaceWebServiceOrders.Model.ListOrdersByNextTokenResult
+        Dim req As New Model.ListOrdersByNextTokenRequest
+        req.SellerId = SellerAccount.SellerID
+        req.NextToken = nextToken
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        Return _WebServiceOrdersClient.ListOrdersByNextToken(req).ListOrdersByNextTokenResult
+    End Function
+
+    Public Function GetOrders(updateFrom As Date, updateTo As Date) As List(Of MarketplaceWebServiceOrders.Model.Order)
+        Dim req As New Model.ListOrdersRequest, res As New Model.ListOrdersResult
+        req.LastUpdatedAfter = updateFrom
+        req.LastUpdatedBefore = updateTo
+        req.OrderStatus.Add("Shipped")
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        req.MarketplaceId.Add(SellerAccount.MarketplaceID)
+        res = _WebServiceOrdersClient.ListOrders(req).ListOrdersResult
+        If res.NextToken Is Nothing Then
+            Return res.Orders
+        Else
+            Dim resNext As New Model.ListOrdersByNextTokenResult
+            resNext = GetOrdersNextToken(res.NextToken)
+            res.Orders.AddRange(resNext.Orders)
+            Do Until resNext.NextToken Is Nothing
+                resNext = GetOrdersNextToken(resNext.NextToken)
+                res.Orders.AddRange(resNext.Orders)
+            Loop
+            Return res.Orders
+        End If
+    End Function
+
+    Public Function GetProducts(id As List(Of String), idType As String) As List(Of MarketplaceWebServiceProducts.Model.GetMatchingProductForIdResult)
+        Dim req As New Model.GetMatchingProductForIdRequest, res As New List(Of Model.GetMatchingProductForIdResult)
+        If id.Count > 5 Then
+            For i = 0 To Math.Ceiling(id.Count / 5) - 1
+                res.AddRange(GetProducts(id.Skip(i * 5).Take(5).ToList, idType))
+            Next
+        ElseIf id.Count > 0 Then
+            req.IdList = New Model.IdListType
+            req.IdList.Id = id
+            req.IdType = idType
+            req.SellerId = SellerAccount.SellerID
+            req.MWSAuthToken = SellerAccount.MWSAuthToken
+            req.MarketplaceId = SellerAccount.MarketplaceID
+            Try
+                res = _WebServiceProductsClient.GetMatchingProductForId(req).GetMatchingProductForIdResult
+            Catch ex As Exception
+
+            End Try
+        End If
+        Return res
+    End Function
+
+    Public Function GetProducts(id As String(), idType As String) As List(Of MarketplaceWebServiceProducts.Model.GetMatchingProductForIdResult)
+        Return GetProducts(id.ToList, idType)
+    End Function
+
+    Public Function GetInboundShipmentByNextToken(nextToken As String) As FBAInboundServiceMWS.Model.ListInboundShipmentsByNextTokenResult
+        Dim req As New Model.ListInboundShipmentsByNextTokenRequest
+        req.NextToken = nextToken
+        Return _FBAInboundShipmentClient.ListInboundShipmentsByNextToken(req).ListInboundShipmentsByNextTokenResult
+    End Function
+
+    Public Function GetInboundShipment(updateAfter As Date, updateBefore As Date) As FBAInboundServiceMWS.Model.InboundShipmentList
+        Dim req As New Model.ListInboundShipmentsRequest, res As New Model.ListInboundShipmentsResult
+        req.LastUpdatedAfter = updateAfter
+        req.LastUpdatedBefore = updateBefore
+        req.SellerId = SellerAccount.SellerID
+        req.MWSAuthToken = SellerAccount.MWSAuthToken
+        'req.Marketplace = SellerAccount.MarketplaceID
+        req.ShipmentStatusList = New Model.ShipmentStatusList
+        req.ShipmentStatusList.member.AddRange({"WORKING", "SHIPPED", "IN_TRANSIT", "DELIVERED", "CHECKED_IN", "RECEIVING", "CLOSED"})
+        res = _FBAInboundShipmentClient.ListInboundShipments(req).ListInboundShipmentsResult
+        If res.NextToken Is Nothing Then
+            Return res.ShipmentData
+        Else
+            Dim resNext As Model.ListInboundShipmentsByNextTokenResult = GetInboundShipmentByNextToken(res.NextToken)
+            res.ShipmentData.member.AddRange(resNext.ShipmentData.member)
+            Do Until resNext.NextToken Is Nothing
+                resNext = GetInboundShipmentByNextToken(resNext.NextToken)
+                res.ShipmentData.member.AddRange(resNext.ShipmentData.member)
+            Loop
+            Return res.ShipmentData
+        End If
+    End Function
+
+
+End Class
